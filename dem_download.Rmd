@@ -1,0 +1,399 @@
+---
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+---
+
+# Downloading DEMs and delineating watersheds
+
+There are lots of ways we can delineate watersheds. A particularly easy one is to use the Stream Stats package. You may recall that Stream Stats is a USGS webpage where you can delineate to a point on a stream. It doesn't work (hasn't been developed) in every state (e.g., Wyoming). So it is good to know how to delineate with other packages (e.g., Whitebox).
+
+## StreamStats
+
+Let's first do a watershed delineation using StreamStats. [Here](https://streamstats.usgs.gov/ss/) is the link to the StreamStats GUI.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dataRetrieval)
+devtools::install_github("markwh/streamstats")
+library(streamstats)
+library(mapview)
+library(leaflet)
+library(sf)
+library(elevatr)
+library(raster)
+library(viridis)
+library(ggnewscale)
+library(tidyterra)
+
+```
+
+Let's first have a look at some of the things we can do with StreamStats.
+
+The gage is USGS 06047500 Bozeman Creek near Bozeman MT
+
+```{r}
+
+gage_info <- readNWISsite(site = "06047500")
+
+xlocation <- gage_info$dec_long_va
+ylocation <- gage_info$dec_lat_va
+
+# Delineate the watershed using library(streamstats)
+
+ws1 <- delineateWatershed(xlocation = xlocation, 
+                          ylocation = ylocation, 
+                          crs = 4326, 
+                          includeparameters = "true", 
+                          includeflowtypes = "true")
+
+# Look at the outline using library(leaflet)
+leafletWatershed(ws1)
+
+# StreamStats also gives us some useful information about the watershed.
+values <- as_tibble(ws1[["parameters"]][["value"]])
+parameters <- as_tibble(ws1[["parameters"]][["name"]])
+meta <- as_tibble(ws1[["parameters"]][["description"]]) %>% 
+  rename("meta" = "value")
+
+# And we can put that into a useful data frame and write_csv. 
+watershed_info <- cbind(parameters, values, meta)
+
+write_csv(watershed_info, "waterhsed_info.csv")
+
+```
+
+Now we can use the shapefile we just got from StreamStats to download a DEM. We will start by writing the shapefile. Next, we will load the shapefile. And then use that shapefile to download DEMs using elevatr. 
+
+```{r}
+writeShapefile(watershed = ws1, layer = "layer_name", dir = "ws1_shp", what = "boundary")
+
+# Read in the shape file using library(sf)
+
+boundary <- st_read("ws1_shp/layer_name.shp") 
+
+# Look at the boundary using library(mapview)
+
+mapview(boundary)
+
+# Download a DEM using library(elevatr)
+
+elevation_data <- elevatr::get_elev_raster(locations = boundary, z = 9, clip = "locations", crs = '+init=EPSG:4326')
+
+mapview(elevation_data)
+
+# This requires library(raster)
+
+writeRaster(elevation_data, "dem/bzn_creek_watershed.tif", overwrite = TRUE, package = "raster", crs = '+init=EPSG:4326')
+
+load_dem <- raster("dem/bzn_creek_watershed.tif") # The raster is already in our environment as elevation_data, this line is just to show you how to load a raster in R. 
+```
+
+Now that we have a raster there are lots of things we can do with it. One is that we can make it into a df and use ggplot to visualize. 
+
+```{r}
+
+elevation_df <- as.data.frame(elevation_data, xy = TRUE)
+
+colnames(elevation_df)[3] <- "elevation"
+
+# remove rows of data frame with one or more NA's,using complete.cases
+elevation_df <- elevation_df[complete.cases(elevation_df), ]
+
+ggplot() +
+  geom_raster(data = elevation_df, aes(x = x, y = y, fill = elevation)) +
+  geom_sf(data = boundary, fill = NA, color = "white") +
+  coord_sf() +
+  scale_fill_viridis_c() +
+  labs(title = "Bozeman Creek Watershed", x = "Longitude", y = "Latitude", fill = "Elevation (meters)")
+```
+ 
+Download USGS DEM with terrainr.
+
+```{r}
+library(terrainr)
+library(sf)
+
+# We could put the coordinates of the gage in and download. We already have the shapefile so we will use that instead. But the commented out code below would do it. 
+# location_of_interest <- data.frame(
+#   x = xlocation,
+#   y = ylocation
+# )
+# 
+# location_of_interest <- st_as_sf(
+#   location_of_interest, 
+#   coords = c("x", "y"), 
+#   crs = 4326
+# )
+# 
+# box_of_interest <- set_bbox_side_length(location_of_interest, 20000)
+
+output_tiles <- get_tiles(boundary,
+                          services = c("elevation"),
+                          resolution = 10 # pixel side length in meters
+                          )
+
+```
+
+Quick plot with raster::
+
+```{r}
+raster::plot(raster::raster(output_tiles[["elevation"]][[1]]))
+```
+
+Now we can run some Whitebox algorithms like fill sinks, flow accumulation, flow direction, and stream extraction.  
+
+We always start hydro-analysis with filling/breaching sinks. 
+
+```{r}
+
+wbt_breach_depressions_least_cost(
+  dem = "dem/output_tiles.tif",
+  output = "dem/bzn_crk_breached.tif",
+  dist = 10,
+  fill = TRUE)
+
+wbt_fill_depressions_wang_and_liu(
+  dem = "dem/bzn_crk_breached.tif",
+  output = "dem/bzn_filled_breached.tif"
+)
+```
+
+Next, we create flow accumulation and pointer rasters. 
+
+```{r}
+wbt_d8_flow_accumulation(input = "dem/bzn_filled_breached.tif",
+                         output = "dem/D8FA.tif")
+
+wbt_d8_pointer(dem = "dem/bzn_filled_breached.tif",
+               output = "dem/D8pointer.tif")
+```
+
+Now, we set a pour point and make it a shape file.
+
+```{r}
+ppoints <- tribble(
+          ~Lon, ~Lat,
+          xlocation, ylocation
+          )
+
+ppointsSP <- SpatialPoints(ppoints, proj4string = CRS("+proj=longlat +datum=WGS84"))
+
+shapefile(ppointsSP, filename = "dem/pourpoints.shp", overwrite = TRUE)
+```
+
+
+Now we can extract the streams like we did last week. 
+
+You can play with the threshold to see how it affects the drainage density. This threshold requires some knowledge of the watershed, climate, etc. 
+
+```{r}
+wbt_extract_streams(flow_accum = "dem/D8FA.tif",
+                    output = "dem/raster_streams.tif",
+                    threshold = 6000)
+
+wbt_jenson_snap_pour_points(pour_pts = "dem/pourpoints.shp",
+                            streams = "dem/raster_streams.tif",
+                            output = "dem/snappedpp.shp",
+                            snap_dist = 0.0010) #careful with this! Know the units of your data
+tmap_mode("view")
+
+pp <- shapefile("dem/snappedpp.shp")
+streams <- raster("dem/raster_streams.tif")
+
+tm_shape(streams)+
+  tm_raster(legend.show = TRUE, palette = "Blues", )+
+tm_shape(pp)+
+  tm_dots(col = "red")
+```
+
+```{r}
+wbt_watershed(d8_pntr = "dem/D8pointer.tif",
+              pour_pts = "dem/snappedpp.shp",
+              output = "dem/bzn_crk_watershed.tif")
+
+ws <- raster("dem/bzn_crk_watershed.tif")
+
+mapview(ws)
+
+```
+
+We have now delineated the watersehd. We can now make a hillshade for visualization.
+
+```{r}
+
+wbt_hillshade(dem = "dem/output_tiles.tif",
+              output = "dem/bzn_creek_hillshade.tif",
+              azimuth = 315)
+
+hillshade <- raster("dem/bzn_creek_hillshade.tif")
+
+wbt_raster_to_vector_polygons(input = "dem/bzn_creek_hillshade.tif", 
+                              output = "dem/bzn_creek_hillshade.shp", 
+                              wd = NULL, 
+                              verbose_mode = FALSE)
+
+
+tm_shape(hillshade) +
+  tm_raster(style = "cont", palette = "-Greys", legend.show = FALSE)
+
+```
+
+But let's clip that hillshade to the delineated watershed. 
+
+```{r}
+
+clip_dem <- ws * dem
+clip_dem_df <- as.data.frame(clip_dem, xy = TRUE)
+colnames(clip_dem_df)[3] <- "elevation"
+
+# remove rows of data frame with one or more NA's,using complete.cases
+clip_dem_df <- clip_dem_df[complete.cases(clip_dem_df), ]
+
+# do same for hillshade
+clip_hillshade <- ws * hillshade
+clip_hillshade_df <- as.data.frame(clip_hillshade, xy = TRUE)
+colnames(clip_hillshade_df)[3] <- "hillshade"
+clip_hillshade_df <- clip_hillshade_df[complete.cases(clip_hillshade_df), ]
+```
+
+Make map with ggplot. 
+
+```{r}
+ggplot() +
+  geom_raster(data = clip_dem_df, aes(x = x, y = y, fill = elevation)) +
+  geom_sf(data = boundary, fill = NA, color = "white") +
+  coord_sf() +
+  scale_fill_viridis_c() +
+  labs(title = "Bozeman Creek Watershed", x = "Longitude", y = "Latitude", fill = "Elevation (meters)")
+```
+
+Let's add the pour point, hillshade, and streams to the figure.
+
+```{r}
+# Make streams a polygon. 
+clip_streams <- ws * streams
+clip_streams_df <- as.data.frame(clip_streams, xy = TRUE)
+colnames(clip_streams_df)[3] <- "elevation"
+clip_streams_df <- clip_streams_df[complete.cases(clip_streams_df), ]
+writeRaster(clip_streams, "dem/clip_streams.tif")
+
+wbt_raster_streams_to_vector(streams = "dem/clip_streams.tif",
+                             d8_pntr = "dem/D8pointer.tif",
+                             output = "dem/streams.shp")
+
+streams_shp <- st_read("dem/streams.shp")
+
+
+```
+
+Make a map with ggplot, add streams and pour point. 
+
+```{r}
+ggplot() +
+  geom_raster(data = clip_dem_df, aes(x = x, y = y, fill = elevation)) +
+  geom_sf(data = streams_shp, color = "blue") +
+  geom_point(data = ppoints, aes(x = Lon, y = Lat), color = "red") + 
+  coord_sf() +
+  scale_fill_viridis_c() +
+  labs(title = "Bozeman Creek Watershed", x = "Longitude", y = "Latitude", fill = "Elevation (meters)")
+
+```
+
+Add hillshade. 
+
+```{r}
+ggplot() +
+  geom_raster(data = clip_hillshade_df,
+              aes(x = x, y = y, fill = hillshade),
+              show.legend = FALSE) +
+  scale_fill_distiller(palette = "Greys") +
+  new_scale_fill() +
+  geom_raster(data = clip_dem_df,
+              aes(x = x, y = y, fill = elevation),
+              alpha = .7) +
+  scale_fill_distiller(palette = "GnBu") +
+  geom_sf(data = streams_shp, color = "blue") +
+  geom_point(data = ppoints, aes(x = Lon, y = Lat), color = "red") +
+  guides(fill = guide_colorsteps(barwidth = 20,
+                                 barheight = .5,
+                                 title.position = "right")) +
+  labs(fill = "m") +
+  coord_sf() +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+Play with colors in. Here change to cold_humid color. 
+```{r}
+library(ggnewscale)
+library(tidyterra)
+
+ggplot() +
+  geom_raster(data = clip_hillshade_df,
+              aes(x = x, y = y, fill = hillshade),
+              show.legend = FALSE) +
+  scale_fill_distiller(palette = "Greys") +
+  new_scale_fill() +
+  geom_raster(data = clip_dem_df,
+              aes(x = x, y = y, fill = elevation),
+              alpha = .7) +
+  scale_fill_cross_blended_c(palette = "cold_humid") +
+  geom_sf(data = streams_shp, color = "blue") +
+  geom_point(data = ppoints, aes(x = Lon, y = Lat), color = "red") +
+  guides(fill = guide_colorsteps(barwidth = 20,
+                                 barheight = .5,
+                                 title.position = "right")) +
+  labs(fill = "m") +
+  coord_sf() +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+Here change to viridis color. 
+```{r}
+
+ggplot() +
+  geom_raster(data = clip_hillshade_df,
+              aes(x = x, y = y, fill = hillshade),
+              show.legend = FALSE) +
+  scale_fill_distiller(palette = "Greys") +
+  new_scale_fill() +
+  geom_raster(data = clip_dem_df,
+              aes(x = x, y = y, fill = elevation),
+              alpha = .7) +
+  scale_fill_continuous(type = "viridis") +
+  geom_sf(data = streams_shp, color = "blue") +
+  geom_point(data = ppoints, aes(x = Lon, y = Lat), color = "red") +
+  labs(fill = "Elevation (m)") +
+  coord_sf() +
+  theme_void() +
+  theme(legend.position = "bottom")
+```
+
+
+Make a map with tmap.
+
+```{r}
+tmap_mode("plot")
+
+tm_shape(clip_hillshade) +
+  tm_raster(style = "cont", palette = "-Greys", legend.show = FALSE) +
+  tm_scale_bar() +
+  tm_shape(clip_dem) +
+  tm_raster(legend.show = FALSE, palette = "-viridis", alpha = 0.5) +
+  tm_shape(streams) + 
+  tm_lines(col = "blue", lwd = 2) +
+  tm_scale_bar() +
+  tm_shape(pp) +
+  tm_dots(col = "red", size = 0.5) +
+  tm_layout(title = "Bozeman Creek \nWatershed")
+
+```
+
+
+
