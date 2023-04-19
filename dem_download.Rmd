@@ -17,18 +17,23 @@ Let's first do a watershed delineation using StreamStats. [Here](https://streams
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
+devtools::install_github("markwh/streamstats", force = TRUE)
+devtools::install_github("https://github.com/giswqs/whiteboxR")
+
 library(tidyverse)
 library(dataRetrieval)
-devtools::install_github("markwh/streamstats")
+library(whitebox)
+whitebox::wbt_init()
 library(streamstats)
 library(mapview)
-library(leaflet)
 library(sf)
 library(elevatr)
 library(raster)
 library(viridis)
 library(ggnewscale)
 library(tidyterra)
+library(terrainr)
+library(tmap)
 
 ```
 
@@ -51,8 +56,6 @@ ws1 <- delineateWatershed(xlocation = xlocation,
                           includeparameters = "true", 
                           includeflowtypes = "true")
 
-# Look at the outline using library(leaflet)
-leafletWatershed(ws1)
 
 # StreamStats also gives us some useful information about the watershed.
 values <- as_tibble(ws1[["parameters"]][["value"]])
@@ -115,8 +118,6 @@ ggplot() +
 Download USGS DEM with terrainr.
 
 ```{r}
-library(terrainr)
-library(sf)
 
 # We could put the coordinates of the gage in and download. We already have the shapefile so we will use that instead. But the commented out code below would do it. 
 # location_of_interest <- data.frame(
@@ -137,13 +138,14 @@ output_tiles <- get_tiles(boundary,
                           resolution = 10 # pixel side length in meters
                           )
 
+output_tiles <- raster(output_tiles[["elevation"]])
+
+writeRaster(output_tiles, "dem/output_tiles.tif", overwrite = TRUE, package = "raster", crs = '+init=EPSG:4326')
+
+mapview(output_tiles)
+
 ```
 
-Quick plot with raster::
-
-```{r}
-raster::plot(raster::raster(output_tiles[["elevation"]][[1]]))
-```
 
 Now we can run some Whitebox algorithms like fill sinks, flow accumulation, flow direction, and stream extraction.  
 
@@ -186,7 +188,6 @@ ppointsSP <- SpatialPoints(ppoints, proj4string = CRS("+proj=longlat +datum=WGS8
 shapefile(ppointsSP, filename = "dem/pourpoints.shp", overwrite = TRUE)
 ```
 
-
 Now we can extract the streams like we did last week. 
 
 You can play with the threshold to see how it affects the drainage density. This threshold requires some knowledge of the watershed, climate, etc. 
@@ -194,7 +195,7 @@ You can play with the threshold to see how it affects the drainage density. This
 ```{r}
 wbt_extract_streams(flow_accum = "dem/D8FA.tif",
                     output = "dem/raster_streams.tif",
-                    threshold = 6000)
+                    threshold = 8000)
 
 wbt_jenson_snap_pour_points(pour_pts = "dem/pourpoints.shp",
                             streams = "dem/raster_streams.tif",
@@ -232,12 +233,6 @@ wbt_hillshade(dem = "dem/output_tiles.tif",
 
 hillshade <- raster("dem/bzn_creek_hillshade.tif")
 
-wbt_raster_to_vector_polygons(input = "dem/bzn_creek_hillshade.tif", 
-                              output = "dem/bzn_creek_hillshade.shp", 
-                              wd = NULL, 
-                              verbose_mode = FALSE)
-
-
 tm_shape(hillshade) +
   tm_raster(style = "cont", palette = "-Greys", legend.show = FALSE)
 
@@ -247,7 +242,7 @@ But let's clip that hillshade to the delineated watershed.
 
 ```{r}
 
-clip_dem <- ws * dem
+clip_dem <- ws * output_tiles
 clip_dem_df <- as.data.frame(clip_dem, xy = TRUE)
 colnames(clip_dem_df)[3] <- "elevation"
 
@@ -275,7 +270,7 @@ ggplot() +
 Let's add the pour point, hillshade, and streams to the figure.
 
 ```{r}
-# Make streams a polygon. 
+# Make streams a data frame then shape. 
 clip_streams <- ws * streams
 clip_streams_df <- as.data.frame(clip_streams, xy = TRUE)
 colnames(clip_streams_df)[3] <- "elevation"
@@ -376,7 +371,7 @@ ggplot() +
 ```
 
 
-Make a map with tmap.
+You can also make this map with tmap.
 
 ```{r}
 tmap_mode("plot")
@@ -386,12 +381,13 @@ tm_shape(clip_hillshade) +
   tm_scale_bar() +
   tm_shape(clip_dem) +
   tm_raster(legend.show = FALSE, palette = "-viridis", alpha = 0.5) +
-  tm_shape(streams) + 
+  tm_shape(streams_shp) + 
   tm_lines(col = "blue", lwd = 2) +
   tm_scale_bar() +
   tm_shape(pp) +
-  tm_dots(col = "red", size = 0.5) +
-  tm_layout(title = "Bozeman Creek \nWatershed")
+  tm_dots(col = "red", size = 0.25) +
+  tm_layout(title = "Bozeman Creek \nWatershed") +
+  tm_compass(type = "arrow", position = c("center", "bottom"))
 
 ```
 

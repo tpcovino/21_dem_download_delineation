@@ -1,0 +1,26 @@
+value,value,meta
+Mean Basin Slope from 30m DEM,39.6,Mean basin slope computed from 30 m DEM
+Channel_Width_remotely_sensed,0,"Channel width determined from remotely sensed data sources, including aerial imagery"
+Contributing Drainage Area,28.2,Area that contributes flow to a point on a stream
+Drainage Area,28.2,Area that drains to a point on a stream
+Percent_above_5000_ft,100,Percent of area above 5000 ft
+Percent above 6000 ft,94.2,Percent of area above 6000 ft
+Mean Basin Elevation,7123.8,Mean Basin Elevation
+Maximum Basin Elevation,9593,Maximum basin elevation
+Mean_Monthly_EvapTrans_Mar_to_Jun_MODIS,1.72,"Spring (March-June) mean monthly evapotranspiration (2001-2011), MODIS"
+ET0710MOD,1.8,"Summer (July-October) mean monthly evapotranspiration (2001-2011), MODIS"
+Percent Forest,88.5,Percentage of area covered by forest
+IRRIGAT_MT,0,Percent of basin that is irrigated based on Montana Final Land Unit (FLU) classification
+LAKESNHDH,0,"Percent of basin in lakes, ponds, and reservoirs fom high resolution National Hydrography Dataset"
+LC01CRPHAY,0,"Percentage of cultivated crops and hay, classes 81 and 82, from NLCD 2001"
+Percent_Developed_from_NLCD2001,0,Percentage of land-use from NLCD 2001 classes 21-24
+LC01WETLND,0,"Percentage of wetlands, classes 90 and 95,  from NLCD 2001"
+Minimum Basin Elevation,5381,Minimum basin elevation
+N Facing Slopes gt 30pct from 30m DEM,24.5,Percent area with north-facing slopes greater than 30 percent from 30-meter DEM.
+Mean Annual Precipitation,32.73,Mean Annual Precipitation
+Relief,4212,Maximum - minimum elevation
+Slopes gt 30pct from 30m DEM,65.8,Percent area with slopes greater than 30 percent from 30-meter DEM.
+Slopes_gt_50pct_from_30m_DEM,31,Percent area with slopes greater than 50 percent from 30-meter DEM.
+Mean Annual Temperature,37.33,Mean Annual Temperature
+Width Of Active Channel,0,Width of active channel
+Width Of Bankfull Channel,0,Width of channel at bankfull
